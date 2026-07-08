@@ -1,0 +1,26 @@
+{
+  "name": "Pokemon PvP Battle Estimator",
+  "short_name": "Pokemon PvP",
+  "description": "Competitive Pokemon battle search, random battles, team battles, and PvP.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0f172a",
+  "background_color": "#020617",
+  "categories": ["games", "utilities"],
+  "icons": [
+    {
+      "src": "/static/192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
