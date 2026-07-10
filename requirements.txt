@@ -114,7 +114,6 @@ pyee==13.0.0
 pygeoif==1.5.1
 pyinput==0.3.2
 pyinstall==0.1.4
-pyinstaller==6.14.1
 pyinstaller-hooks-contrib==2025.5
 PyJWT==2.13.0
 PyMySQL==1.1.1
