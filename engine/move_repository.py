@@ -7,6 +7,26 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOVE_CACHE_FILE = os.path.join(BASE_DIR, "cache", "move_cache.json")
 _moves = None
+DEFAULT_TYPE_MOVES = {
+    "normal": ["body-slam", "tackle"],
+    "fire": ["flamethrower", "fire-punch"],
+    "water": ["surf", "waterfall"],
+    "electric": ["thunderbolt", "thunder-punch"],
+    "grass": ["energy-ball", "seed-bomb"],
+    "ice": ["ice-beam", "ice-punch"],
+    "fighting": ["close-combat", "brick-break"],
+    "poison": ["sludge-bomb", "poison-jab"],
+    "ground": ["earthquake", "earth-power"],
+    "flying": ["air-slash", "aerial-ace"],
+    "psychic": ["psychic", "psyshock"],
+    "bug": ["x-scissor", "bug-buzz"],
+    "rock": ["stone-edge", "rock-slide"],
+    "ghost": ["shadow-ball", "shadow-claw"],
+    "dragon": ["dragon-pulse", "dragon-claw"],
+    "dark": ["dark-pulse", "crunch"],
+    "steel": ["flash-cannon", "iron-head"],
+    "fairy": ["moonblast", "play-rough"],
+}
 
 
 def _slug(value):
@@ -41,8 +61,8 @@ def resolve_moves(preferred, learnable=None, pokemon_types=None, attack_category
             result.append(move)
             seen.add(key)
 
-    for name in preferred or []:
-        add(name)
+    for entry in preferred or []:
+        add(entry.get("name") if isinstance(entry, dict) else entry)
 
     candidates = []
     types = set(pokemon_types or [])
@@ -61,6 +81,15 @@ def resolve_moves(preferred, learnable=None, pokemon_types=None, attack_category
         candidates.append((score, move["name"]))
     for _, name in sorted(candidates, reverse=True):
         add(name)
+
+    if not result:
+        for move_type in pokemon_types or []:
+            for name in DEFAULT_TYPE_MOVES.get(_slug(move_type), []):
+                add(name)
+
+    if not result:
+        for name in ("body-slam", "swift", "tackle"):
+            add(name)
 
     if not result:
         result.append({

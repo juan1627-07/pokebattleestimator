@@ -41,4 +41,14 @@ def apply_smogon_build(pokemon):
         battle["moves_source"] = "Smogon usage"
         battle["smogon_format"] = build.get("format")
         battle["smogon_month"] = build.get("source_month")
+    elif "-mega" in str(pokemon.get("name", "")).lower():
+        # Mega forms can be present in Showdown data without independent usage
+        # samples.  Keep their moves usable by inheriting their base form set.
+        base_name = re.split(r"-mega", str(pokemon["name"]), flags=re.IGNORECASE)[0]
+        base_build = get_smogon_build(base_name) or {}
+        if base_build.get("moves"):
+            battle["recommended_moves"] = base_build["moves"]
+            battle["moves_source"] = "Base-form competitive moves"
+            battle["smogon_format"] = base_build.get("format")
+            battle["smogon_month"] = base_build.get("source_month")
     return pokemon

@@ -2,7 +2,8 @@
 
 import random
 
-from engine.battle_state import _effective_speed, _move, _ordered_actions, _side, _slug, play_turn
+from engine.battle_state import BATTLEFIELD_THEMES, DEFAULT_INVENTORY, _effective_speed, _move, _ordered_actions, _side, _slug, play_turn
+import copy
 from engine.type_engine import get_move_multiplier
 
 
@@ -16,6 +17,7 @@ def _reset_stages(side):
         side["stages"][stat] = 0
     side["protected"] = False
     side["choice_lock"] = None
+    side["recharging"] = False
 
 
 def _apply_entry_ability(state, actor, log):
@@ -77,6 +79,10 @@ def create_team_battle(user_profiles, opponent_profiles):
         "user_active": 0,
         "opponent_active": 0,
         "hazards": {"user": _empty_hazards(), "opponent": _empty_hazards()},
+        "hazard_durations": {"user": {}, "opponent": {}},
+        "inventory": {"user": copy.deepcopy(DEFAULT_INVENTORY), "opponent": copy.deepcopy(DEFAULT_INVENTORY)},
+        "field_theme": random.choice(BATTLEFIELD_THEMES),
+        "field_conditions": {},
         "revealed": {"user": [0], "opponent": [0]},
         "log": [],
         "history": [],
@@ -106,6 +112,7 @@ def switch_team_member(state, actor, index, announce=True):
     if index not in revealed.setdefault(actor, []):
         revealed[actor].append(index)
     _sync_active(state)
+    _reset_stages(state[actor])
     state["status"] = "active"
     if announce:
         state["log"].append({"actor": actor, "switch": index, "message": f"{state[actor]['name']}, I choose you!"})
@@ -168,7 +175,7 @@ def _team_action_order(state, selected):
             "actor": actor,
             "type": action["type"],
             "priority": priority,
-            "speed": _effective_speed(state[actor]),
+            "speed": _effective_speed(state[actor], state.get("field_conditions"), actor),
         })
     return _ordered_actions(actions)
 
@@ -198,6 +205,7 @@ def _resolve_team_actions(state, selected, rng, auto_switch_opponent):
             "user": state["user"],
             "opponent": state["opponent"],
             "hazards": state.setdefault("hazards", {"user": _empty_hazards(), "opponent": _empty_hazards()}),
+            "field_conditions": state.setdefault("field_conditions", {}),
             "log": [],
         }
         play_turn(
@@ -205,7 +213,9 @@ def _resolve_team_actions(state, selected, rng, auto_switch_opponent):
             user_move=move_names.get("user"),
             opponent_move=move_names.get("opponent"),
             rng=rng,
-            skip_actors=skip_actors,
+            # An item (or a switch) intentionally leaves that actor without a
+            # move this turn; do not try to resolve a None move in the duel.
+            skip_actors=skip_actors | ({"user", "opponent"} - set(move_names)),
         )
         state["turn"] = duel["turn"]
         state["log"].extend(duel["log"])

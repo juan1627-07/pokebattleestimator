@@ -41,7 +41,41 @@ DEBUFF_MOVES = {
     "metal-sound": ("special-defense", -2), "scary-face": ("speed", -2),
 }
 HAZARD_MOVES = {"stealth-rock", "spikes", "toxic-spikes"}
+CONSUMABLE_ITEMS = {
+    "potion": {"label": "Potion", "hp": 20},
+    "super-potion": {"label": "Super Potion", "hp": 60},
+    "hyper-potion": {"label": "Hyper Potion", "hp": 120},
+    "max-potion": {"label": "Max Potion", "full_hp": True},
+    "full-restore": {"label": "Full Restore", "full_hp": True, "cure_status": True},
+    "ether": {"label": "Ether", "pp": 10},
+    "max-ether": {"label": "Max Ether", "full_pp": True},
+    "elixir": {"label": "Elixir", "pp": 10, "all_moves": True},
+    "max-elixir": {"label": "Max Elixir", "full_pp": True, "all_moves": True},
+    "pp-up": {"label": "PP Up", "pp_up": True},
+    "antidote": {"label": "Antidote", "statuses": {"poisoned", "badly-poisoned"}},
+    "full-heal": {"label": "Full Heal", "cure_status": True},
+}
+DEFAULT_INVENTORY = {name: 2 for name in CONSUMABLE_ITEMS}
 RECHARGE_MOVES = {"hyper-beam", "blast-burn", "hydro-cannon", "frenzy-plant", "giga-impact"}
+BATTLEFIELD_THEMES = [
+    "field-cyber-arena",
+    "field-neo-forest",
+    "field-volcanic-fissure",
+    "field-fractured-glacier",
+    "field-desert-wasteland",
+]
+BATTLE_LEVEL = 100
+STRUGGLE_MOVE = {
+    "name": "struggle", "type": "normal", "power": 50,
+    "accuracy": 100, "priority": 0, "damage_class": "physical",
+}
+FIELD_CONDITION_MOVES = {
+    "rain-dance": ("stream", {"duration": 5, "water_multiplier": 1.5, "fire_multiplier": 0.5}),
+    "sunny-day": ("harsh-sun", {"duration": 5, "fire_multiplier": 1.5, "water_multiplier": 0.5}),
+    "sandstorm": ("sandstorm", {"duration": 5, "residual": 1 / 16, "immune_types": ["rock", "ground", "steel"]}),
+    "hail": ("snow", {"duration": 5, "residual": 1 / 16, "immune_types": ["ice"]}),
+    "snowscape": ("snow", {"duration": 5, "speed_multiplier": 0.5, "affected_types": ["dragon", "flying", "grass", "ground"]}),
+}
 
 
 def _slug(value):
@@ -59,7 +93,8 @@ def _side(profile):
     side["ability"] = profile.get("ability")
     side["item"] = profile.get("item")
     side["moves"] = [copy.deepcopy(move) for move in profile.get("moves", []) if isinstance(move, dict)]
-    side["max_hp"] = calculated_stat(profile["stats"]["hp"], hp=True)
+    side["level"] = BATTLE_LEVEL
+    side["max_hp"] = calculated_stat(profile["stats"]["hp"], level=BATTLE_LEVEL, hp=True)
     side["current_hp"] = side["max_hp"]
     side["status"] = None
     side["sleep_turns"] = 0
@@ -81,6 +116,11 @@ def create_battle(user, opponent):
         "winner": None,
         "user": _side(user),
         "opponent": _side(opponent),
+        "field_theme": random.choice(BATTLEFIELD_THEMES),
+        "field_conditions": {},
+        "hazards": {"user": {"stealth-rock": 0, "spikes": 0, "toxic-spikes": 0}, "opponent": {"stealth-rock": 0, "spikes": 0, "toxic-spikes": 0}},
+        "hazard_durations": {"user": {}, "opponent": {}},
+        "inventory": {"user": copy.deepcopy(DEFAULT_INVENTORY), "opponent": copy.deepcopy(DEFAULT_INVENTORY)},
         "log": [],
     }
     for actor, target in (("user", "opponent"), ("opponent", "user")):
@@ -92,6 +132,8 @@ def create_battle(user, opponent):
 
 def _move(side, move_name):
     wanted = _slug(move_name)
+    if wanted == "struggle" and _all_real_moves_out_of_pp(side):
+        return copy.deepcopy(STRUGGLE_MOVE)
     for move in side["moves"]:
         if _slug(move.get("name")) == wanted:
             if isinstance(move.get("current_pp"), int) and move["current_pp"] <= 0:
@@ -100,17 +142,30 @@ def _move(side, move_name):
     raise ValueError(f"Move '{move_name}' is not available.")
 
 
+def _all_real_moves_out_of_pp(side):
+    moves = side.get("moves", [])
+    pp_tracked = [move for move in moves if isinstance(move.get("current_pp"), int)]
+    return bool(pp_tracked) and all(move.get("current_pp", 0) <= 0 for move in pp_tracked)
+
+
 def _stage_multiplier(stage):
     return (2 + stage) / 2 if stage >= 0 else 2 / (2 - stage)
 
 
-def _effective_speed(side):
-    speed = calculated_stat(side["stats"]["speed"])
+def _effective_speed(side, field_conditions=None, actor=None):
+    speed = calculated_stat(side["stats"]["speed"], level=side.get("level", BATTLE_LEVEL))
     speed *= _stage_multiplier(side["stages"]["speed"])
     if side["status"] == "paralyzed":
         speed *= 0.5
     if _slug(side.get("item")) == "choice-scarf":
         speed *= 1.5
+    for condition in (field_conditions or {}).values():
+        payload = condition.get("payload", {})
+        affected_types = payload.get("affected_types")
+        if payload.get("speed_multiplier") and (
+            not affected_types or any(t in side.get("types", []) for t in affected_types)
+        ):
+            speed *= payload["speed_multiplier"]
     return speed
 
 
@@ -147,11 +202,18 @@ def _ensure_hazards(state):
         "user": {"stealth-rock": 0, "spikes": 0, "toxic-spikes": 0},
         "opponent": {"stealth-rock": 0, "spikes": 0, "toxic-spikes": 0},
     })
+    state.setdefault("hazard_durations", {"user": {}, "opponent": {}})
 
 
 def _status_action(state, actor_side, target_side, actor, move, rng, log):
     name = _slug(move["name"])
     target = "opponent" if actor == "user" else "user"
+    if name in FIELD_CONDITION_MOVES:
+        condition_name, payload = FIELD_CONDITION_MOVES[name]
+        conditions = state.setdefault("field_conditions", {})
+        conditions[condition_name] = {"duration": payload.get("duration", 5), "payload": copy.deepcopy(payload)}
+        log.append({"actor": actor, "move": move["name"], "hazard": condition_name, "message": f"{actor_side['name']} changed the battlefield to {_display(condition_name)}!"})
+        return
     if name in HAZARD_MOVES:
         _ensure_hazards(state)
         limits = {"stealth-rock": 1, "spikes": 3, "toxic-spikes": 2}
@@ -160,6 +222,7 @@ def _status_action(state, actor_side, target_side, actor, move, rng, log):
             log.append({"actor": actor, "move": move["name"], "message": f"{_display(name)} is already set."})
             return
         state["hazards"][target][name] = current + 1
+        state["hazard_durations"].setdefault(target, {})[name] = 5
         log.append({"actor": actor, "move": move["name"], "hazard": name, "message": f"{actor_side['name']} scattered {_display(name)} on the opposing side!"})
         return
     if name == "protect":
@@ -198,7 +261,16 @@ def _status_action(state, actor_side, target_side, actor, move, rng, log):
     log.append({"actor": actor, "move": move["name"], "message": f"{actor_side['name']} used {_display(move['name'])}, but nothing happened."})
 
 
-def _attack(actor_side, target_side, actor, move, rng, log):
+def _field_damage_multiplier(state, move):
+    move_type = _slug(move.get("type"))
+    multiplier = 1.0
+    for condition in state.get("field_conditions", {}).values():
+        payload = condition.get("payload", {})
+        multiplier *= payload.get(f"{move_type}_multiplier", 1.0)
+    return multiplier
+
+
+def _attack(state, actor_side, target_side, actor, move, rng, log):
     log.append({"actor": actor, "move": move["name"], "message": f"{actor_side['name']} used {_display(move['name'])}!"})
     if target_side["protected"]:
         log.append({"actor": actor, "message": f"{target_side['name']} protected itself."})
@@ -211,6 +283,10 @@ def _attack(actor_side, target_side, actor, move, rng, log):
     roll = rng.uniform(0.85, 1.0)
     result = calculate_move_damage(actor_side, target_side, move, random_factor=roll)
     damage = result["damage"]
+    field_multiplier = _field_damage_multiplier(state, move)
+    if damage and field_multiplier != 1:
+        damage = max(1, int(damage * field_multiplier))
+        result["damage"] = damage
     if damage >= target_side["current_hp"] and target_side["current_hp"] == target_side["max_hp"]:
         ability = _slug(target_side.get("ability"))
         item = _slug(target_side.get("item"))
@@ -236,7 +312,101 @@ def _attack(actor_side, target_side, actor, move, rng, log):
         actor_side["recharging"] = True
 
 
-def _end_of_turn(side, actor, log):
+def _apply_field_damage(state, side, actor, log):
+    if side["current_hp"] <= 0:
+        return
+    for name, condition in state.get("field_conditions", {}).items():
+        payload = condition.get("payload", {})
+        residual = payload.get("residual")
+        immune_types = payload.get("immune_types", set())
+        if residual and not any(t in side.get("types", []) for t in immune_types):
+            damage = max(1, int(side["max_hp"] * residual))
+            side["current_hp"] = max(0, side["current_hp"] - damage)
+            log.append({"actor": actor, "damage": damage, "hazard": name, "message": f"{side['name']} took {damage} damage from {_display(name)}."})
+
+
+def _tick_field_conditions(state, log):
+    expired = []
+    for name, condition in state.get("field_conditions", {}).items():
+        condition["duration"] = max(0, condition.get("duration", 0) - 1)
+        if condition["duration"] <= 0:
+            expired.append(name)
+    for name in expired:
+        state["field_conditions"].pop(name, None)
+        log.append({"hazard": name, "message": f"The {_display(name)} faded."})
+
+
+def _tick_hazards(state, log):
+    """Decay entry hazards in the same clear-state phase as weather."""
+    _ensure_hazards(state)
+    for target, durations in state["hazard_durations"].items():
+        expired = []
+        for name, duration in list(durations.items()):
+            durations[name] = max(0, duration - 1)
+            if durations[name] == 0:
+                expired.append(name)
+        for name in expired:
+            state["hazards"][target][name] = 0
+            durations.pop(name, None)
+            log.append({"hazard": name, "message": f"The {_display(name)} on {target}'s side cleared."})
+
+
+def apply_consumable(state, item_name, actor="user", move_name=None):
+    """Apply a battle item to the actor's active Pokemon and consume one charge."""
+    item_key = _slug(item_name)
+    item = CONSUMABLE_ITEMS.get(item_key)
+    if not item:
+        raise ValueError("That item is not available.")
+    inventories = state.setdefault("inventory", {"user": copy.deepcopy(DEFAULT_INVENTORY), "opponent": copy.deepcopy(DEFAULT_INVENTORY)})
+    # Upgrade states created before per-player inventories were introduced.
+    if item_key in inventories:
+        inventories = {"user": inventories, "opponent": copy.deepcopy(DEFAULT_INVENTORY)}
+        state["inventory"] = inventories
+    inventory = inventories.setdefault(actor, copy.deepcopy(DEFAULT_INVENTORY))
+    if inventory.get(item_key, 0) <= 0:
+        raise ValueError(f"No {item['label']} remaining.")
+    side = state[actor]
+    healed = 0
+    restored_pp = 0
+    if item.get("full_hp"):
+        healed = side["max_hp"] - side["current_hp"]
+        side["current_hp"] = side["max_hp"]
+    elif item.get("hp"):
+        healed = min(item["hp"], side["max_hp"] - side["current_hp"])
+        side["current_hp"] += healed
+    cured = bool(side.get("status") and (item.get("cure_status") or side.get("status") in item.get("statuses", set())))
+    if cured:
+        side["status"] = None
+        side["sleep_turns"] = 0
+    if item.get("pp") or item.get("full_pp") or item.get("pp_up"):
+        moves = side.get("moves", [])
+        if not item.get("all_moves"):
+            wanted = _slug(move_name) if move_name else None
+            moves = [move for move in moves if not wanted or _slug(move.get("name")) == wanted][:1]
+            if not moves:
+                moves = side.get("moves", [])[:1]
+        for move in moves:
+            maximum = move.get("pp")
+            if isinstance(maximum, int):
+                before = move.get("current_pp", maximum)
+                if item.get("pp_up"):
+                    move["pp"] = max(maximum + 1, int(maximum * 1.2))
+                    maximum = move["pp"]
+                    move["current_pp"] = min(maximum, before + 1)
+                else:
+                    move["current_pp"] = maximum if item.get("full_pp") else min(maximum, before + item["pp"])
+                restored_pp += move["current_pp"] - before
+    if not healed and not restored_pp and not cured:
+        raise ValueError("This item would have no effect.")
+    inventory[item_key] -= 1
+    state["log"] = [{"actor": actor, "healing": healed, "item": item_key, "message": f"{side['name']} used {item['label']}."}]
+    return state
+
+
+def _end_of_turn(state, side, actor, log):
+    if side["current_hp"] <= 0:
+        return
+    _apply_field_damage(state, side, actor, log)
     if side["current_hp"] <= 0:
         return
     if side["status"] in {"burned", "poisoned", "badly-poisoned"}:
@@ -284,7 +454,7 @@ def play_turn(state, user_move=None, opponent_move=None, rng=None, skip_actors=N
             {
                 "actor": actor,
                 "priority": selected[actor].get("priority", 0),
-                "speed": _effective_speed(state[actor]),
+                "speed": _effective_speed(state[actor], state.get("field_conditions"), actor),
             }
             for actor in selected
         ])
@@ -301,13 +471,15 @@ def play_turn(state, user_move=None, opponent_move=None, rng=None, skip_actors=N
         if move.get("damage_class") == "status" or not move.get("power"):
             _status_action(state, actor_side, target_side, actor, move, rng, state["log"])
         else:
-            _attack(actor_side, target_side, actor, move, rng, state["log"])
+            _attack(state, actor_side, target_side, actor, move, rng, state["log"])
         _finish(state)
         if state["status"] == "finished":
             break
 
     if state["status"] == "active":
-        _end_of_turn(state["user"], "user", state["log"])
-        _end_of_turn(state["opponent"], "opponent", state["log"])
+        _end_of_turn(state, state["user"], "user", state["log"])
+        _end_of_turn(state, state["opponent"], "opponent", state["log"])
+        _tick_field_conditions(state, state["log"])
+        _tick_hazards(state, state["log"])
         _finish(state)
     return state

@@ -5,7 +5,7 @@ from engine.battle_engine import evaluate_matchup
 from engine.competitive_engine import evaluate_build
 from engine.tier_engine import get_tier_analysis
 from engine.battle_state import (
-    create_battle, play_turn, RECOVERY_MOVES, SETUP_MOVES, STATUS_MOVES, DEBUFF_MOVES
+    create_battle, play_turn, apply_consumable, RECOVERY_MOVES, SETUP_MOVES, STATUS_MOVES, DEBUFF_MOVES
 )
 from engine.damage_engine import calculate_move_damage
 from engine.move_repository import resolve_moves
@@ -1429,6 +1429,18 @@ def recommend_natures(stats, role):
 
         })
 
+    nature_effects = {
+        "Jolly": ("Speed", "Special Attack"), "Adamant": ("Attack", "Special Attack"),
+        "Timid": ("Speed", "Attack"), "Modest": ("Special Attack", "Attack"),
+        "Careful": ("Special Defense", "Special Attack"), "Calm": ("Special Defense", "Attack"),
+        "Impish": ("Defense", "Special Attack"), "Relaxed": ("Defense", "Speed"),
+        "Naive": ("Speed", "Special Defense"), "Hasty": ("Speed", "Defense"),
+        "Serious": ("Neutral", "Neutral"),
+    }
+    for recommendation in recommendations:
+        boosted, reduced = nature_effects.get(recommendation["name"], ("Neutral", "Neutral"))
+        recommendation["boosted_stat"] = boosted
+        recommendation["reduced_stat"] = reduced
     return recommendations
 
 def recommend_ability(abilities, role):
@@ -1806,11 +1818,17 @@ def _perspective_state(state, player_key):
             view["status"] = "awaiting_opponent_switch"
         elif view.get("status") == "awaiting_opponent_switch":
             view["status"] = "awaiting_user_switch"
+        inventories = view.get("inventory", {})
+        if "user" in inventories:
+            view["inventory"] = {"user": inventories.get("opponent", {}), "opponent": inventories.get("user", {})}
         for entry in view.get("log", []):
             if entry.get("actor") == "user":
                 entry["actor"] = "opponent"
             elif entry.get("actor") == "opponent":
                 entry["actor"] = "user"
+    inventories = view.get("inventory", {})
+    if "user" in inventories:
+        view["inventory"] = inventories.get("user", {})
     return _mask_opponent_team(view)
 
 
@@ -1869,12 +1887,26 @@ def _resolve_pvp_choices(room):
     if "user" not in choices or "opponent" not in choices:
         return False
     kwargs = {}
+    item_logs = []
+    skip_actors = set()
     for actor, choice in choices.items():
         if choice["type"] == "switch":
             kwargs[f"{actor}_switch"] = choice["index"]
-        else:
+        elif choice["type"] == "move":
             kwargs[f"{actor}_move"] = choice["move"]
-    play_team_turn(state, auto_switch_opponent=False, **kwargs)
+        elif choice["type"] == "item":
+            apply_consumable(state, choice["item"], actor=actor, move_name=choice.get("move"))
+            item_logs.extend(state.get("log", []))
+            skip_actors.add(actor)
+    if kwargs:
+        play_team_turn(state, auto_switch_opponent=False, skip_actors=skip_actors, **kwargs)
+    else:
+        # Two items were selected: both actions are spent without an attack.
+        state["turn"] += 1
+        state["phase"] = "END_TURN"
+    if item_logs:
+        state["log"] = item_logs + state.get("log", [])
+        state.setdefault("history", []).extend(item_logs)
     choices.clear()
     room["turn_deadline"] = time.time() + 30
     return True
@@ -1979,6 +2011,15 @@ def _finish_pvp_setup(room):
         room["status"] = "battle"
         room["turn_deadline"] = time.time() + 30
     return room
+
+
+def _surrender_state(state, loser="user"):
+    winner = "opponent" if loser == "user" else "user"
+    state["status"] = "finished"
+    state["winner"] = winner
+    state["log"] = [{"actor": loser, "message": f"{state[loser]['name']}'s trainer gave up."}]
+    _append_history(state)
+    return state
 
 
 def random_team_profiles(team_size=6):
@@ -2164,6 +2205,32 @@ def battle_turn(battle_id):
     })
 
 
+@app.post("/api/battle/<battle_id>/surrender")
+def battle_surrender(battle_id):
+    state = BATTLES.get(battle_id)
+    if not state:
+        return jsonify({"success": False, "message": "Battle not found."}), 404
+    _surrender_state(state, "user")
+    return jsonify({"success": True, "battle_id": battle_id, "battle": state})
+
+
+@app.post("/api/battle/<battle_id>/item")
+def battle_item(battle_id):
+    state = BATTLES.get(battle_id)
+    if not state or state.get("status") == "finished":
+        return jsonify({"success": False, "message": "Battle not found or finished."}), 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        apply_consumable(state, payload.get("item"), move_name=payload.get("move"))
+        item_log = list(state["log"])
+        opponent_move = choose_opponent_move(state["opponent"], state["user"])
+        play_turn(state, opponent_move=opponent_move, skip_actors={"user"})
+        state["log"] = item_log + state["log"]
+    except ValueError as error:
+        return jsonify({"success": False, "message": str(error)}), 400
+    return jsonify({"success": True, "battle_id": battle_id, "battle": state})
+
+
 @app.get("/api/pokemon-names")
 def pokemon_name_search():
     query = request.args.get("q", "").strip()
@@ -2235,6 +2302,33 @@ def team_battle_turn(battle_id):
         "opponent_switch": opponent_switch,
         "battle": state,
     })
+
+
+@app.post("/api/team-battle/<battle_id>/surrender")
+def team_battle_surrender(battle_id):
+    state = BATTLES.get(battle_id)
+    if not state or state.get("mode") != "team":
+        return jsonify({"success": False, "message": "Team battle not found."}), 404
+    _surrender_state(state, "user")
+    return jsonify({"success": True, "battle_id": battle_id, "battle": state})
+
+
+@app.post("/api/team-battle/<battle_id>/item")
+def team_battle_item(battle_id):
+    state = BATTLES.get(battle_id)
+    if not state or state.get("mode") != "team" or state.get("status") == "finished":
+        return jsonify({"success": False, "message": "Team battle not found or finished."}), 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        apply_consumable(state, payload.get("item"), move_name=payload.get("move"))
+        item_log = list(state["log"])
+        opponent_move = choose_opponent_move(state["opponent"], state["user"])
+        play_team_turn(state, opponent_move=opponent_move, skip_actors={"user"})
+        state["log"] = item_log + state["log"]
+        state.setdefault("history", []).extend(item_log)
+    except ValueError as error:
+        return jsonify({"success": False, "message": str(error)}), 400
+    return jsonify({"success": True, "battle_id": battle_id, "battle": state})
 
 
 @app.post("/api/pvp/create")
@@ -2359,6 +2453,49 @@ def pvp_turn(room_id):
     except (ValueError, IndexError) as error:
         return jsonify({"success": False, "message": str(error)}), 400
 
+    return jsonify({"success": True, "room": _room_payload(room, player_key)})
+
+
+@app.post("/api/pvp/<room_id>/surrender")
+def pvp_surrender(room_id):
+    room = PVP_ROOMS.get(room_id.upper())
+    if not room or room.get("status") != "battle" or not room.get("battle"):
+        return jsonify({"success": False, "message": "PVP battle not found."}), 404
+    payload = request.get_json(silent=True) or {}
+    player_key = _player_key(room, payload.get("player_id"))
+    if not player_key:
+        return jsonify({"success": False, "message": "Invalid player."}), 403
+    loser = _actor_for_player(player_key)
+    _surrender_state(room["battle"], loser)
+    room.setdefault("choices", {}).clear()
+    room["turn_deadline"] = None
+    return jsonify({"success": True, "room": _room_payload(room, player_key)})
+
+
+@app.post("/api/pvp/<room_id>/item")
+def pvp_item(room_id):
+    room = PVP_ROOMS.get(room_id.upper())
+    if not room or room.get("status") != "battle" or not room.get("battle"):
+        return jsonify({"success": False, "message": "PVP battle not found."}), 404
+    payload = request.get_json(silent=True) or {}
+    player_key = _player_key(room, payload.get("player_id"))
+    if not player_key:
+        return jsonify({"success": False, "message": "Invalid player."}), 403
+    try:
+        actor = _actor_for_player(player_key)
+        choices = room.setdefault("choices", {})
+        if actor in choices:
+            return jsonify({"success": True, "room": _room_payload(room, player_key)})
+        # Validate availability now; restore state so the item is only consumed when both turns resolve.
+        state = room["battle"]
+        snapshot = copy.deepcopy(state)
+        apply_consumable(state, payload.get("item"), actor=actor, move_name=payload.get("move"))
+        state.clear()
+        state.update(snapshot)
+        choices[actor] = {"type": "item", "item": payload.get("item"), "move": payload.get("move")}
+        _resolve_pvp_choices(room)
+    except ValueError as error:
+        return jsonify({"success": False, "message": str(error)}), 400
     return jsonify({"success": True, "room": _room_payload(room, player_key)})
 
 

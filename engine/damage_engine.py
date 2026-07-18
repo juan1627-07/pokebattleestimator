@@ -21,7 +21,8 @@ def _stage_multiplier(stage):
     return (2 + stage) / 2 if stage >= 0 else 2 / (2 - stage)
 
 
-def calculate_move_damage(attacker, defender, move, random_factor=None, level=50):
+def calculate_move_damage(attacker, defender, move, random_factor=None, level=None):
+    level = level or attacker.get("level", 50)
     category = move.get("damage_class", "status")
     power = move.get("power") or 0
     move_type = move.get("type", "normal")

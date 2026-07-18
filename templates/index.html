@@ -75,14 +75,15 @@
     </header>
 
 
-    <!-- Interactive one-on-one battle -->
-    <section class="max-w-7xl mx-auto px-6 mt-8">
-        <div class="battle-panel rounded-xl p-6 shadow-xl">
-            <div class="battle-mode-tabs" role="tablist" aria-label="Battle mode">
-                <button id="cpuModeBtn" type="button" class="active">Player vs Computer</button>
-                <button id="pvpModeBtn" type="button">PVP Network</button>
-            </div>
+    <nav class="app-nav max-w-7xl mx-auto px-4 sm:px-6 mt-5" aria-label="Primary navigation">
+        <button type="button" class="active" data-app-tab="battle">Player vs Computer</button>
+        <button type="button" data-app-tab="pvp">PVP Network</button>
+        <button type="button" data-app-tab="pokedex">Pokedex</button>
+    </nav>
 
+    <!-- Interactive battle -->
+    <section id="battleWorkspace" data-app-view="battle" class="max-w-7xl mx-auto px-4 sm:px-6 mt-5">
+        <div class="battle-panel rounded-xl p-6 shadow-xl">
             <div id="cpuTeamBattleSetup" class="team-battle-launch">
                 <div>
                     <p class="mode-kicker">PRIMARY BATTLE MODE</p>
@@ -150,12 +151,14 @@
                     </div>
                 </div>
                 <div class="battle-stage" id="battleStage">
+                    <div id="recoveryEffect" class="recovery-effect" aria-hidden="true"></div>
                     <article id="opponentFighter" class="battle-fighter opponent-fighter">
                         <div class="battle-hud opponent-hud">
-                            <div class="hud-title-row"><h2 id="battleOpponentName"></h2><span id="battleOpponentMatchup" class="matchup-badge"></span><span class="level-badge">Lv. 50</span></div>
+                            <div class="hud-title-row"><h2 id="battleOpponentName"></h2><span id="battleOpponentMatchup" class="matchup-badge"></span><span class="level-badge">Lv. 100</span></div>
                             <p id="battleOpponentDetails" class="hud-details"></p>
                             <div class="hp-row"><span>HP</span><div class="hp-track"><div id="battleOpponentHpBar" class="hp-fill"></div></div></div>
                             <div class="hud-footer"><span id="battleOpponentStatus" class="status-pill"></span><span id="battleOpponentHp"></span></div>
+                            <div id="battleOpponentPips" class="hud-pokeballs hidden" aria-label="Opponent party status"></div>
                         </div>
                         <div class="battle-platform opponent-platform"></div>
                         <img id="battleOpponentImage" class="battle-sprite opponent-sprite" alt="Opponent Pokémon">
@@ -163,24 +166,34 @@
 
                     <article id="userFighter" class="battle-fighter user-fighter">
                         <div class="battle-hud user-hud">
-                            <div class="hud-title-row"><h2 id="battleUserName"></h2><span id="battleUserMatchup" class="matchup-badge"></span><span class="level-badge">Lv. 50</span></div>
+                            <div class="hud-title-row"><h2 id="battleUserName"></h2><span id="battleUserMatchup" class="matchup-badge"></span><span class="level-badge">Lv. 100</span></div>
                             <p id="battleUserDetails" class="hud-details"></p>
                             <div class="hp-row"><span>HP</span><div class="hp-track"><div id="battleUserHpBar" class="hp-fill"></div></div></div>
                             <div class="hud-footer"><span id="battleUserStatus" class="status-pill"></span><span id="battleUserHp"></span></div>
+                            <div id="battleUserPips" class="hud-pokeballs hidden" aria-label="Your party status"></div>
                         </div>
                         <div class="battle-platform user-platform"></div>
                         <img id="battleUserImage" class="battle-sprite user-sprite" alt="Your Pokémon">
                     </article>
                 </div>
 
+                <div id="fieldTelemetry" class="field-telemetry" aria-live="polite"></div>
+
                 <div class="battle-command-panel">
                     <div class="battle-dialogue">
                         <div class="dialogue-caret">▶</div>
                         <p id="battlePrompt">What will your Pokémon do?</p>
+                        <div class="battle-action-controls">
+                            <button id="battleSwitchBtn" type="button">Switch</button>
+                            <button id="battleItemsBtn" type="button">Items</button>
+                            <button id="battleGiveUpBtn" type="button">Give Up</button>
+                        </div>
                         <div id="battleResult" class="battle-result"></div>
                     </div>
                     <div class="move-selector">
                         <div id="battleTurn" class="turn-badge"></div>
+                        <button id="moveMatrixToggle" type="button" class="move-matrix-toggle">Move Matrix · Grandmaster Stratagem</button>
+                        <div id="stratagemGrid" class="stratagem-grid hidden" aria-label="Predictive tactical grid"></div>
                         <div id="battleMoves" class="grid sm:grid-cols-2 gap-3"></div>
                         <button id="confirmMoveBtn" type="button" class="confirm-move-button" disabled>Confirm Move</button>
                     </div>
@@ -192,11 +205,12 @@
 
 
 
+    <div id="pokedexWorkspace" data-app-view="pokedex" class="hidden">
     <!-- ========================================= -->
     <!-- Search Area -->
     <!-- ========================================= -->
 
-    <section class="max-w-7xl mx-auto px-6 mt-8">
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 mt-5 pokedex-search-shell">
 
         <div class="bg-slate-900 rounded-xl p-6 shadow-xl">
 
@@ -238,7 +252,7 @@
 
     </section>
 
-    <section id="counterSection" class="max-w-7xl mx-auto px-6 mt-8 hidden">
+    <section id="counterSection" class="max-w-7xl mx-auto px-4 sm:px-6 mt-5 hidden">
         <div class="bg-slate-900 rounded-xl p-6">
             <div class="flex flex-wrap justify-between items-end gap-2 mb-5">
                 <div>
@@ -257,7 +271,7 @@
     <!-- Main Content -->
     <!-- ========================================= -->
 
-    <section class="max-w-7xl mx-auto px-6 mt-8">
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 mt-5">
 
         <div class="grid lg:grid-cols-3 gap-8">
 
@@ -331,6 +345,8 @@
                     </span>
 
                 </div>
+
+                <div id="natureRecommendations" class="nature-recommendations"></div>
 
                 <div class="flex justify-between">
 
@@ -498,7 +514,7 @@
     <!-- Moves -->
     <!-- ========================================= -->
 
-    <section class="max-w-7xl mx-auto px-6 mt-8 mb-10">
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 mt-5 mb-10">
 
         <div class="bg-slate-900 rounded-xl p-6">
 
@@ -531,6 +547,7 @@
         </div>
 
     </section>
+    </div>
 
 </div>
 
@@ -542,10 +559,31 @@
             <h2 id="switchModalTitle">Switch Pokémon?</h2>
             <p id="switchModalMessage" class="text-slate-400 mt-2"></p>
         </div>
+        <div id="switchPartyList" class="switch-party-list"></div>
         <div class="switch-actions">
             <button id="cancelSwitchBtn" type="button">Cancel</button>
             <button id="confirmSwitchBtn" type="button">Confirm Switch</button>
         </div>
+    </div>
+</div>
+
+<div id="itemsPopup" class="items-popup hidden" role="dialog" aria-modal="true" aria-labelledby="itemsPopupTitle">
+    <div class="items-dialog">
+        <div class="items-heading">
+            <h2 id="itemsPopupTitle">Items</h2>
+            <button id="closeItemsBtn" type="button" aria-label="Close items">x</button>
+        </div>
+        <p class="items-subtitle">Item Matrix · active Pokémon recovery</p>
+        <p id="itemNotice" class="item-notice" role="status" aria-live="polite"></p>
+        <div id="itemsCategoryList" class="items-category-list"></div>
+    </div>
+</div>
+
+<div id="giveUpOverlay" class="give-up-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="giveUpTitle">
+    <div class="give-up-dialog">
+        <h2 id="giveUpTitle">Give up?</h2>
+        <p>Match ends in <strong id="giveUpCountdown">10</strong>s</p>
+        <button id="cancelGiveUpBtn" type="button">Cancel</button>
     </div>
 </div>
 

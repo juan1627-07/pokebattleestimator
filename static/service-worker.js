@@ -1,4 +1,4 @@
-const CACHE_VERSION = "pokemon-pvp-v4";
+const CACHE_VERSION = "pokemon-pvp-v12";
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const IMAGE_CACHE = `${CACHE_VERSION}-images`;

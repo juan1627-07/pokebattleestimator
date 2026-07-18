@@ -28,6 +28,9 @@ let audioEnabled = false;
 let audioContext = null;
 let musicTimer = null;
 let musicStep = 0;
+let giveUpTimer = null;
+let giveUpSeconds = 10;
+let themedBattleKey = null;
 
 const BATTLE_TYPE_COLORS = {
     normal: "#a8a29e", fire: "#f97316", water: "#3b82f6", electric: "#eab308",
@@ -67,18 +70,46 @@ const confirmSwitchBtn = document.getElementById("confirmSwitchBtn");
 const cancelSwitchBtn = document.getElementById("cancelSwitchBtn");
 const confirmMoveBtn = document.getElementById("confirmMoveBtn");
 const audioToggle = document.getElementById("audioToggle");
-const cpuModeBtn = document.getElementById("cpuModeBtn");
-const pvpModeBtn = document.getElementById("pvpModeBtn");
 const pvpBattleSetup = document.getElementById("pvpBattleSetup");
 const createPvpRoomBtn = document.getElementById("createPvpRoomBtn");
 const joinPvpRoomBtn = document.getElementById("joinPvpRoomBtn");
 const submitPvpTeamBtn = document.getElementById("submitPvpTeamBtn");
 const battleHomeBtn = document.getElementById("battleHomeBtn");
+const battleSwitchBtn = document.getElementById("battleSwitchBtn");
+const battleItemsBtn = document.getElementById("battleItemsBtn");
+const battleGiveUpBtn = document.getElementById("battleGiveUpBtn");
+const itemsPopup = document.getElementById("itemsPopup");
+const closeItemsBtn = document.getElementById("closeItemsBtn");
+const cancelGiveUpBtn = document.getElementById("cancelGiveUpBtn");
+const giveUpOverlay = document.getElementById("giveUpOverlay");
+const moveMatrixToggle = document.getElementById("moveMatrixToggle");
+let stratagemOpen = false;
+let lastRecoveryEffectKey = null;
+
+const BATTLEFIELD_THEMES = [
+    "field-cyber-arena",
+    "field-neo-forest",
+    "field-volcanic-fissure",
+    "field-fractured-glacier",
+    "field-desert-wasteland"
+];
+
+const BATTLE_ITEMS = {
+    Potions: ["Potion", "Super Potion", "Hyper Potion", "Max Potion", "Full Restore"],
+    "PP Recovery": ["Ether", "Max Ether", "Elixir", "Max Elixir", "PP Up"],
+    Status: ["Antidote", "Full Heal"]
+};
+const DEFAULT_ITEM_COUNT = 2;
 
 startBattleBtn.addEventListener("click", startBattle);
 startTeamBattleBtn.addEventListener("click", startTeamBattle);
-cpuModeBtn.addEventListener("click", () => setBattleSetupMode("cpu"));
-pvpModeBtn.addEventListener("click", () => setBattleSetupMode("pvp"));
+document.querySelectorAll("[data-app-tab]").forEach(button => button.addEventListener("click", () => setAppView(button.dataset.appTab)));
+moveMatrixToggle.addEventListener("click", () => {
+    stratagemOpen = !stratagemOpen;
+    document.getElementById("stratagemGrid").classList.toggle("hidden", !stratagemOpen);
+    moveMatrixToggle.classList.toggle("active", stratagemOpen);
+    renderStratagemGrid();
+});
 createPvpRoomBtn.addEventListener("click", createPvpRoom);
 joinPvpRoomBtn.addEventListener("click", joinPvpRoom);
 submitPvpTeamBtn.addEventListener("click", submitPvpTeam);
@@ -89,6 +120,11 @@ confirmSwitchBtn.addEventListener("click", () => {
 confirmMoveBtn.addEventListener("click", () => {
     if (pendingMoveName && !confirmMoveBtn.disabled) playBattleMove(pendingMoveName);
 });
+battleSwitchBtn.addEventListener("click", openSwitchPartyDialog);
+battleItemsBtn.addEventListener("click", toggleItemsPopup);
+battleGiveUpBtn.addEventListener("click", startGiveUpCountdown);
+closeItemsBtn.addEventListener("click", closeItemsPopup);
+cancelGiveUpBtn.addEventListener("click", cancelGiveUpCountdown);
 audioToggle.addEventListener("click", toggleAudio);
 battleHomeBtn.addEventListener("click", () => {
     document.body.classList.remove("battle-active");
@@ -98,15 +134,48 @@ battleHomeBtn.addEventListener("click", () => {
 
 buildPvpTeamInputs();
 renderPvpOpponentPreview();
+renderItemsPopup();
 
 function setBattleSetupMode(mode) {
     const isPvp = mode === "pvp";
-    cpuModeBtn.classList.toggle("active", !isPvp);
-    pvpModeBtn.classList.toggle("active", isPvp);
     document.getElementById("cpuTeamBattleSetup").classList.toggle("hidden", isPvp);
     document.getElementById("cpuBattleDivider").classList.toggle("hidden", isPvp);
     document.getElementById("cpuSingleBattleSetup").classList.toggle("hidden", isPvp);
     pvpBattleSetup.classList.toggle("hidden", !isPvp);
+}
+
+function setAppView(view) {
+    const pokedex = view === "pokedex";
+    document.getElementById("battleWorkspace").classList.toggle("hidden", pokedex);
+    document.getElementById("pokedexWorkspace").classList.toggle("hidden", !pokedex);
+    document.querySelectorAll("[data-app-tab]").forEach(button => button.classList.toggle("active", button.dataset.appTab === view));
+    if (view === "pvp") setBattleSetupMode("pvp");
+    if (view === "battle") setBattleSetupMode("cpu");
+}
+
+function pickBattlefieldTheme() {
+    return BATTLEFIELD_THEMES[Math.floor(Math.random() * BATTLEFIELD_THEMES.length)];
+}
+
+function applyBattlefieldTheme(theme) {
+    const stage = document.getElementById("battleStage");
+    stage.classList.remove(...BATTLEFIELD_THEMES);
+    stage.classList.add(theme || pickBattlefieldTheme());
+}
+
+function prepareBattlefieldForMatch(matchKey, theme) {
+    if (themedBattleKey === matchKey) return;
+    themedBattleKey = matchKey;
+    applyBattlefieldTheme(theme);
+}
+
+function getAvailablePartyMembers() {
+    if (!currentBattleState || !["team", "pvp"].includes(currentBattleState.mode)) return [];
+    return currentBattleState.user_team || [];
+}
+
+function isBattleInputBlocked() {
+    return battleInputLocked || (currentBattleMode === "pvp" && pvpHasLockedMove);
 }
 
 function buildPvpTeamInputs() {
@@ -136,10 +205,16 @@ function getPvpTeamNames() {
 function renderPvpOpponentPreview(ready = false) {
     const container = document.getElementById("pvpOpponentPreview");
     container.replaceChildren();
+    container.classList.toggle("opponent-ready", ready);
+    container.classList.toggle("opponent-choosing", !ready);
     for (let index = 0; index < 6; index += 1) {
         const slot = document.createElement("div");
         slot.className = `pvp-shadow-slot ${ready ? "ready" : ""}`;
-        slot.textContent = ready ? "Locked" : "?";
+        if (ready) {
+            slot.innerHTML = index === 0 ? "OK" : "Locked";
+        } else {
+            slot.textContent = index === 0 ? "Opponent is choosing....." : "?";
+        }
         container.appendChild(slot);
     }
 }
@@ -221,6 +296,7 @@ function applyPvpRoom(room, playerId = pvpPlayerId) {
     renderPvpOpponentPreview(Boolean(room.players?.[opponentKey]?.ready));
     if (room.status === "battle" && room.battle) {
         currentBattleId = room.room_id;
+        prepareBattlefieldForMatch(currentBattleId, room.battle.field_theme);
         battleArena.classList.remove("hidden");
         document.body.classList.add("battle-active");
         const shouldAnimateTurn = room.battle.turn !== lastAnimatedPvpTurn && room.battle.log?.some(entry => entry.move);
@@ -300,6 +376,33 @@ async function refreshPvpRoom() {
     }
 }
 
+function renderFieldTelemetry() {
+    const container = document.getElementById("fieldTelemetry");
+    if (!currentBattleState) return;
+    container.replaceChildren();
+    const add = (name, duration, target = "") => {
+        const badge = document.createElement("span");
+        badge.textContent = `⏳ ${prettyName(name)}${target ? ` · ${target}` : ""} [${duration} Turns Remaining]`;
+        container.appendChild(badge);
+    };
+    Object.entries(currentBattleState.field_conditions || {}).forEach(([name, condition]) => add(name, condition.duration));
+    Object.entries(currentBattleState.hazard_durations || {}).forEach(([target, hazards]) => Object.entries(hazards).forEach(([name, duration]) => add(name, duration, target)));
+}
+
+function renderStratagemGrid(move) {
+    const grid = document.getElementById("stratagemGrid");
+    if (!stratagemOpen || !currentBattleState) return;
+    grid.replaceChildren();
+    for (let square = 0; square < 16; square += 1) {
+        const cell = document.createElement("span");
+        cell.className = `stratagem-cell ${(square + Math.floor(square / 4)) % 2 ? "dark" : "light"}`;
+        if (square === 1) cell.textContent = "♚";
+        if (square === 14) cell.textContent = "♔";
+        if (move && [5, 10].includes(square)) cell.classList.add("vector");
+        grid.appendChild(cell);
+    }
+}
+
 async function startTeamBattle() {
     startBattleAudio();
     pvpHasLockedMove = false;
@@ -313,6 +416,7 @@ async function startTeamBattle() {
         if (!response.ok) throw new Error(data.message || "Unable to create teams.");
         currentBattleId = data.battle_id;
         currentBattleMode = "team";
+        prepareBattlefieldForMatch(currentBattleId, data.battle.field_theme);
         battleError.classList.add("hidden");
         battleArena.classList.remove("hidden");
         document.body.classList.add("battle-active");
@@ -345,6 +449,7 @@ async function startBattle() {
         if (!response.ok) throw new Error(data.message || "Unable to start battle.");
         currentBattleId = data.battle_id;
         currentBattleMode = "single";
+        prepareBattlefieldForMatch(currentBattleId, data.battle.field_theme);
         battleError.classList.add("hidden");
         battleArena.classList.remove("hidden");
         document.body.classList.add("battle-active");
@@ -449,13 +554,24 @@ function renderBattle(state) {
     currentBattleState = state;
     lastBattleTurn = state.turn;
     pendingMoveName = canKeepPendingMove ? previousPendingMove : null;
-    const inputLocked = battleInputLocked || (currentBattleMode === "pvp" && pvpHasLockedMove);
+    prepareBattlefieldForMatch(currentBattleId || `${state.mode || "single"}-${state.turn}`, state.field_theme);
+    const inputLocked = isBattleInputBlocked();
     confirmMoveBtn.disabled = !pendingMoveName || state.status !== "active" || inputLocked;
     confirmMoveBtn.textContent = pendingMoveName ? `Use ${prettyName(pendingMoveName)}` : "Select a move";
+    battleSwitchBtn.disabled = !["team", "pvp"].includes(state.mode)
+        || state.status === "finished"
+        || state.status === "awaiting_opponent_switch"
+        || inputLocked;
+    battleItemsBtn.disabled = state.status === "finished" || inputLocked;
+    battleGiveUpBtn.disabled = state.status === "finished" || inputLocked;
     renderBattleSide("User", state.user);
     renderBattleSide("Opponent", state.opponent);
-    renderTeamRosters(state);
+    renderHudPokeballs(state);
     updateTurnBadge();
+    renderFieldTelemetry();
+    renderStratagemGrid();
+    const itemEntry = [...(state.log || [])].reverse().find(entry => entry.item && entry.actor === "user");
+    if (itemEntry) showRecoveryEffect(state.user, itemEntry, `${state.turn}-${itemEntry.item}-${state.user.current_hp}`);
     document.getElementById("battlePrompt").textContent = state.status === "awaiting_user_switch"
         ? "Choose a healthy PokÃ©mon from your party."
         : state.status === "awaiting_opponent_switch"
@@ -464,7 +580,12 @@ function renderBattle(state) {
 
     const moves = document.getElementById("battleMoves");
     moves.replaceChildren();
-    state.user.moves.forEach(move => {
+    const allMovesOutOfPp = state.user.moves.length
+        && state.user.moves.every(move => Number.isFinite(move.current_pp) && move.current_pp <= 0);
+    const movesToRender = allMovesOutOfPp
+        ? [{name: "struggle", type: "normal", power: 50, pp: 1, current_pp: 1, damage_class: "physical"}]
+        : state.user.moves;
+    movesToRender.forEach(move => {
         const button = document.createElement("button");
         button.className = `move-button move-${move.type}`;
         button.type = "button";
@@ -472,7 +593,7 @@ function renderBattle(state) {
         const movePower = move.power || "Status";
         const movePp = move.current_pp ?? move.pp ?? "--";
         const maxPp = move.pp ?? "--";
-        const noPp = Number.isFinite(move.current_pp) && move.current_pp <= 0;
+        const noPp = move.name !== "struggle" && Number.isFinite(move.current_pp) && move.current_pp <= 0;
         const recharging = Boolean(state.user.recharging);
         const disabledReason = noPp ? "No PP" : recharging ? "Recharging" : "";
         button.innerHTML = `
@@ -491,7 +612,8 @@ function renderBattle(state) {
     const entries = shownLog.length ? shownLog : [{message: "Choose your opening move."}];
     entries.forEach(entry => {
         const row = document.createElement("p");
-        row.className = entry.actor ? `log-${entry.actor}` : "";
+        const intensity = entry.item ? "log-item" : entry.healing ? "log-heal" : entry.hazard ? "log-field" : entry.damage >= Math.max(20, (entry.actor === "user" ? state.opponent.max_hp : state.user.max_hp) * .22) ? "log-heavy" : "";
+        row.className = `${entry.actor ? `log-${entry.actor}` : ""} ${intensity}`.trim();
         row.textContent = entry.message;
         log.appendChild(row);
     });
@@ -531,23 +653,29 @@ function selectBattleMove(moveName, button) {
     confirmMoveBtn.textContent = `Use ${prettyName(moveName)}`;
     document.getElementById("battlePrompt").textContent =
         `Use ${prettyName(moveName)}?`;
+    renderStratagemGrid(moveName);
 }
 
 function renderTeamRosters(state) {
     const overview = document.getElementById("teamOverview");
-    if (!["team", "pvp"].includes(state.mode)) {
-        overview.classList.add("hidden");
-        return;
-    }
-    overview.classList.remove("hidden");
-    renderRoster("userTeamRoster", state.user_team, state.user_active, true, state.status);
-    const revealed = new Set(state.revealed?.opponent || [state.opponent_active]);
-    revealed.add(state.opponent_active);
-    const opponentTeam = state.opponent_team.map((member, index) => {
-        if (member.hidden || member.current_hp <= 0 || revealed.has(index)) return member;
-        return {hidden: true, name: "Hidden", current_hp: 1, max_hp: 1};
+    // Switching remains available from its dedicated control; party state now lives under each HUD.
+    overview.classList.add("hidden");
+}
+
+function renderHudPokeballs(state) {
+    const isTeamBattle = ["team", "pvp"].includes(state.mode);
+    [["battleUserPips", state.user_team], ["battleOpponentPips", state.opponent_team]].forEach(([id, team]) => {
+        const container = document.getElementById(id);
+        container.replaceChildren();
+        container.classList.toggle("hidden", !isTeamBattle);
+        if (!isTeamBattle) return;
+        (team || []).slice(0, 6).forEach(member => {
+            const pip = document.createElement("span");
+            pip.className = `hud-pokeball ${member.current_hp <= 0 ? "fainted" : "ready"}`;
+            pip.setAttribute("aria-label", member.current_hp <= 0 ? "Fainted Pokémon" : "Usable Pokémon");
+            container.appendChild(pip);
+        });
     });
-    renderRoster("opponentTeamRoster", opponentTeam, state.opponent_active, false, state.status);
 }
 
 function renderRoster(containerId, team, activeIndex, interactive, battleStatus) {
@@ -590,19 +718,254 @@ function renderRoster(containerId, team, activeIndex, interactive, battleStatus)
     });
 }
 
-function openSwitchDialog(index, member) {
+function renderSwitchPartyList() {
+    const list = document.getElementById("switchPartyList");
+    list.replaceChildren();
+    getAvailablePartyMembers().forEach((member, index) => {
+        const fainted = member.current_hp <= 0;
+        const active = index === currentBattleState.user_active;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `team-member user-member ${active ? "active" : ""} ${fainted ? "fainted" : ""}`;
+        button.disabled = fainted || active || currentBattleState.status === "awaiting_opponent_switch" || isBattleInputBlocked();
+        const image = document.createElement("img");
+        image.src = member.front_image || member.image || "";
+        image.alt = member.name;
+        const info = document.createElement("span");
+        const hpPercent = Math.max(0, Math.round(member.current_hp / member.max_hp * 100));
+        const condition = fainted ? "Fainted" : active ? "Active" : `${hpPercent}% HP`;
+        info.innerHTML = `<strong>${member.name}</strong><small>${condition}</small>`;
+        button.append(image, info);
+        button.addEventListener("click", () => selectSwitchTarget(index, member));
+        list.appendChild(button);
+    });
+}
+
+function selectSwitchTarget(index, member) {
     pendingSwitchIndex = index;
     document.getElementById("switchPokemonImage").src = member.front_image || member.image || "";
     document.getElementById("switchModalMessage").textContent =
         currentBattleState?.status === "awaiting_user_switch"
             ? `Send out ${member.name} to continue the battle.`
             : `Send out ${member.name}? This uses your action for the turn.`;
+    confirmSwitchBtn.disabled = false;
+    renderSwitchPartyList();
+}
+
+function openSwitchPartyDialog() {
+    if (!currentBattleState || !["team", "pvp"].includes(currentBattleState.mode)) {
+        return showBattleError("Switching is available in 6v6 and PVP battles.");
+    }
+    if (currentBattleState.status === "awaiting_opponent_switch" || isBattleInputBlocked()) return;
+    pendingSwitchIndex = null;
+    document.getElementById("switchPokemonImage").src = currentBattleState.user.front_image || currentBattleState.user.image || "";
+    document.getElementById("switchModalMessage").textContent = "Choose a healthy reserve from your party.";
+    confirmSwitchBtn.disabled = true;
+    renderSwitchPartyList();
+    switchModal.classList.remove("hidden");
+}
+
+function openSwitchDialog(index, member) {
+    selectSwitchTarget(index, member);
     switchModal.classList.remove("hidden");
 }
 
 function closeSwitchDialog() {
     pendingSwitchIndex = null;
+    confirmSwitchBtn.disabled = false;
     switchModal.classList.add("hidden");
+}
+
+function renderItemsPopup() {
+    const container = document.getElementById("itemsCategoryList");
+    container.replaceChildren();
+    const inventory = currentBattleState?.inventory?.user || currentBattleState?.inventory || {};
+    Object.entries(BATTLE_ITEMS).forEach(([category, items]) => {
+        const section = document.createElement("section");
+        section.className = "items-category";
+        const title = document.createElement("h3");
+        title.textContent = category;
+        const list = document.createElement("ul");
+        items.forEach(item => {
+            const row = document.createElement("li");
+            const count = inventory[item.toLowerCase().replace(/ /g, "-")] ?? DEFAULT_ITEM_COUNT;
+            row.innerHTML = `<span>${item} <small>×${count}</small></span>`;
+            const apply = document.createElement("button");
+            apply.type = "button";
+            apply.textContent = "APPLY";
+            apply.disabled = !currentBattleId || count <= 0 || currentBattleState?.status === "finished";
+            apply.title = !currentBattleId ? "Start a battle before using items." : count <= 0 ? "This item is out of stock." : "Uses this item and spends this turn.";
+            apply.addEventListener("click", () => applyBattleItem(item));
+            row.appendChild(apply);
+            list.appendChild(row);
+        });
+        section.append(title, list);
+        container.appendChild(section);
+    });
+}
+
+function showItemNotice(message, kind = "info") {
+    const notice = document.getElementById("itemNotice");
+    notice.textContent = message;
+    notice.className = `item-notice ${kind}`;
+}
+
+async function applyBattleItem(item) {
+    if (!currentBattleId || !currentBattleState) {
+        showItemNotice("Start a battle before using an item.", "error");
+        return;
+    }
+    if (isBattleInputBlocked()) {
+        showItemNotice("Action locked: wait for the current turn to resolve.", "error");
+        return;
+    }
+    const target = currentBattleState.user;
+    const missingHp = Math.max(0, target.max_hp - target.current_hp);
+    const confirmation = `${item} → ${target.name}\nCurrent HP: ${target.current_hp}/${target.max_hp}\n${missingHp ? `Recovery available: ${missingHp} HP.` : "No HP is currently missing."}\n\nUse this item? It will consume your turn.`;
+    if (!window.confirm(confirmation)) {
+        showItemNotice("Item use cancelled. Your turn was not spent.", "info");
+        return;
+    }
+    battleInputLocked = true;
+    showItemNotice(`${item} deploying — this spends your turn.`, "info");
+    // Immediate local feedback: the actual HP/PP state is still confirmed by the server.
+    showRecoveryEffect(target, {item: item.toLowerCase().replace(/ /g, "-"), preview: "APPLYING"}, `pending-${Date.now()}`);
+    try {
+        const route = currentBattleMode === "pvp" ? `${API_BASE}/api/pvp/${currentBattleId}/item` : currentBattleMode === "team" ? `${API_BASE}/api/team-battle/${currentBattleId}/item` : `${API_BASE}/api/battle/${currentBattleId}/item`;
+        const response = await fetch(route, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({item, player_id: pvpPlayerId})});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || "Item could not be applied.");
+        const pvpPending = currentBattleMode === "pvp" && data.room?.choices?.you;
+        if (currentBattleMode === "pvp") applyPvpRoom(data.room); else renderBattle(data.battle);
+        if (pvpPending) {
+            showItemNotice(`${item} locked in. It will apply when both players resolve the turn.`, "info");
+        }
+        navigator.vibrate?.(18);
+        if (!pvpPending) showItemNotice(`${item} applied to the active Pokémon. Your turn has been used.`, "success");
+    } catch (error) {
+        const reason = error.message === "This item would have no effect."
+            ? `${item} cannot be used: ${target.name} has no compatible recovery need right now.`
+            : error.message || "This item cannot be used right now.";
+        showItemNotice(reason, "error");
+        showBattleError(reason);
+    } finally {
+        battleInputLocked = false;
+        if (currentBattleState) renderBattle(currentBattleState);
+        renderItemsPopup();
+    }
+}
+
+function showRecoveryEffect(target, entry, effectKey) {
+    if (lastRecoveryEffectKey === effectKey) return;
+    lastRecoveryEffectKey = effectKey;
+    const effect = document.getElementById("recoveryEffect");
+    const amount = entry.preview || (entry.healing ? `+${entry.healing} HP` : "STATUS CURED");
+    effect.innerHTML = `<span class="recovery-orb">✦</span><strong>${amount}</strong><small>${prettyName(entry.item)} applied</small>`;
+    effect.classList.remove("active");
+    void effect.offsetWidth;
+    effect.classList.add("active");
+    document.getElementById("battleArena").classList.add("recovery-flash");
+    setTimeout(() => document.getElementById("battleArena").classList.remove("recovery-flash"), 720);
+}
+
+function toggleItemsPopup() {
+    itemsPopup.classList.toggle("hidden");
+    if (!itemsPopup.classList.contains("hidden")) {
+        showItemNotice(currentBattleId ? "Choose an item. A successful use spends your turn." : "Start a battle to activate the Item Matrix.", "info");
+        renderItemsPopup();
+    }
+}
+
+function closeItemsPopup() {
+    itemsPopup.classList.add("hidden");
+}
+
+function startGiveUpCountdown() {
+    if (!currentBattleId || currentBattleState?.status === "finished" || isBattleInputBlocked()) return;
+    giveUpSeconds = 10;
+    document.getElementById("giveUpCountdown").textContent = String(giveUpSeconds);
+    giveUpOverlay.classList.remove("hidden");
+    if (giveUpTimer) clearInterval(giveUpTimer);
+    giveUpTimer = setInterval(() => {
+        giveUpSeconds -= 1;
+        document.getElementById("giveUpCountdown").textContent = String(Math.max(0, giveUpSeconds));
+        if (giveUpSeconds <= 0) finalizeGiveUp();
+    }, 1000);
+}
+
+function cancelGiveUpCountdown() {
+    if (giveUpTimer) clearInterval(giveUpTimer);
+    giveUpTimer = null;
+    giveUpOverlay.classList.add("hidden");
+}
+
+async function finalizeGiveUp() {
+    cancelGiveUpCountdown();
+    battleInputLocked = true;
+    try {
+        const route = currentBattleMode === "pvp"
+            ? `${API_BASE}/api/pvp/${currentBattleId}/surrender`
+            : currentBattleMode === "team"
+                ? `${API_BASE}/api/team-battle/${currentBattleId}/surrender`
+                : `${API_BASE}/api/battle/${currentBattleId}/surrender`;
+        const body = currentBattleMode === "pvp" ? {player_id: pvpPlayerId} : {};
+        const response = await fetch(route, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || "Unable to give up.");
+        if (currentBattleMode === "pvp") {
+            applyPvpRoom(data.room);
+        } else {
+            renderBattle(data.battle);
+        }
+    } catch (error) {
+        showBattleError(error.message);
+    } finally {
+        battleInputLocked = false;
+        if (currentBattleState) renderBattle(currentBattleState);
+    }
+}
+
+function moveMultiplier(moveType, defendingTypes) {
+    const [strong = [], resisted = [], immune = []] = TYPE_CHART[String(moveType || "").toLowerCase()] || [[], [], []];
+    let multiplier = 1;
+    for (const type of defendingTypes || []) {
+        const defendType = String(type || "").toLowerCase();
+        if (immune.includes(defendType)) return 0;
+        if (strong.includes(defendType)) multiplier *= 2;
+        if (resisted.includes(defendType)) multiplier *= 0.5;
+    }
+    return multiplier;
+}
+
+function bestAttackMultiplier(attacker, defender) {
+    const moveTypes = (attacker?.moves || [])
+        .map(move => move.type)
+        .filter(Boolean);
+    const fallbackTypes = attacker?.types || [];
+    const attackTypes = moveTypes.length ? moveTypes : fallbackTypes;
+    return Math.max(...attackTypes.map(type => moveMultiplier(type, defender?.types || [])), 1);
+}
+
+function renderMatchupBadge(prefix, attacker, defender) {
+    const badge = document.getElementById(`battle${prefix}Matchup`);
+    const multiplier = bestAttackMultiplier(attacker, defender);
+    badge.classList.remove("matchup-strong", "matchup-weak", "matchup-immune");
+    if (multiplier === 0) {
+        badge.textContent = "Immune";
+        badge.classList.add("matchup-immune");
+    } else if (multiplier > 1) {
+        badge.textContent = "Super";
+        badge.classList.add("matchup-strong");
+    } else if (multiplier < 1) {
+        badge.textContent = "Resist";
+        badge.classList.add("matchup-weak");
+    } else {
+        badge.textContent = "Neutral";
+    }
 }
 
 function renderBattleSide(prefix, side) {
@@ -642,6 +1005,11 @@ function renderBattleSide(prefix, side) {
             : condition;
     statusPill.classList.toggle("status-low", lowLife);
     statusPill.classList.toggle("status-fainted", side.current_hp <= 0);
+    if (currentBattleState) {
+        const attacker = prefix === "User" ? currentBattleState.user : currentBattleState.opponent;
+        const defender = prefix === "User" ? currentBattleState.opponent : currentBattleState.user;
+        renderMatchupBadge(prefix, attacker, defender);
+    }
 }
 
 function wait(ms) {
@@ -921,7 +1289,7 @@ async function searchPokemon() {
 function renderPokemon(pokemon){
 
     pokemonImage.src =
-
+        pokemon.images?.showdown_front || pokemon.images?.showdown ||
         pokemon.images.official_artwork ||
 
         pokemon.images.pokemon_home ||
@@ -977,8 +1345,25 @@ battleScore.textContent =
 
     renderRecommendedMoves(pokemon.battle.recommended_moves);
 
+    renderNatureRecommendations(pokemon.battle?.recommended_natures || [], pokemon.battle?.role || "competitive build");
+
     renderCounters(pokemon.name, pokemon.battle.counters || []);
 
+}
+
+function renderNatureRecommendations(natures, role) {
+    const container = document.getElementById("natureRecommendations");
+    container.replaceChildren();
+    natures.slice(0, 2).forEach(nature => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "nature-choice";
+        const boosted = nature.boosted_stat || nature.boost || "Attack";
+        const reduced = nature.reduced_stat || nature.reduced || "unused attacking stat";
+        button.innerHTML = `<strong>${nature.name} · Best for ${role}</strong><span>Effect: +${prettyName(boosted)}, -${prettyName(reduced)}</span><small>Prioritizes its productive offense while trimming the stat this build is least likely to use.</small>`;
+        button.addEventListener("click", () => { bestNature.textContent = nature.name; });
+        container.appendChild(button);
+    });
 }
 
 function renderCounters(targetName, counters) {
@@ -995,9 +1380,21 @@ function renderCounters(targetName, counters) {
         const content = document.createElement("div");
         content.innerHTML = `<strong>${counter.name}</strong><span>${counter.tier} Â· ${counter.reason}</span>`;
         card.append(image, content);
+        const explain = () => showCounterToast(`${counter.name}: ${counter.reason}`);
+        card.addEventListener("mouseenter", explain);
+        card.addEventListener("click", explain);
         container.appendChild(card);
     });
     section.classList.toggle("hidden", counters.length === 0);
+}
+
+function showCounterToast(message) {
+    let toast = document.getElementById("counterToast");
+    if (!toast) { toast = document.createElement("div"); toast.id = "counterToast"; toast.className = "counter-toast"; document.body.appendChild(toast); }
+    toast.textContent = message;
+    toast.classList.add("show");
+    clearTimeout(showCounterToast.timer);
+    showCounterToast.timer = setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
 
