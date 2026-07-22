@@ -365,10 +365,11 @@ button.team-member:hover:not(:disabled) { transform: translateY(-2px); border-co
         radial-gradient(ellipse at 100% 100%, #315c3c 0 28%, transparent 29%);
 }
 
-.battle-fighter { position: absolute; z-index: 2; inset: 0; }
+.battle-fighter { position: absolute; inset: 0; }
 
 .battle-platform {
     position: absolute;
+    z-index: 1;
     width: 310px;
     height: 82px;
     border-radius: 50%;
@@ -390,7 +391,7 @@ button.team-member:hover:not(:disabled) { transform: translateY(-2px); border-co
 }
 
 .opponent-sprite { left: 11%; top: 14%; max-width: 24vw; max-height: 245px; }
-.user-sprite { z-index: 4; right: 8%; bottom: 19%; width: 270px; height: 270px; max-width: 27vw; max-height: 285px; image-rendering: auto; transform: scaleX(-1); }
+.user-sprite { right: 8%; bottom: 19%; width: 270px; height: 270px; max-width: 27vw; max-height: 285px; image-rendering: auto; transform: scaleX(-1); }
 
 .battle-hud {
     position: absolute;
@@ -404,8 +405,8 @@ button.team-member:hover:not(:disabled) { transform: translateY(-2px); border-co
     box-shadow: 8px 9px 0 rgba(20, 43, 42, .28);
 }
 
-.opponent-hud { left: 5%; top: 52%; }
-.user-hud { right: 5%; bottom: 2%; }
+.opponent-hud { right: 5%; bottom: 2%; }
+.user-hud { left: 5%; top: 52%; }
 
 .hud-title-row, .hud-footer, .hp-row {
     display: flex;
@@ -679,8 +680,8 @@ button.team-member:hover:not(:disabled) { transform: translateY(-2px); border-co
     .team-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .battle-stage { height: 620px; }
     .battle-hud { width: min(390px, 74%); }
-    .opponent-hud { left: 3%; top: 3%; }
-    .user-hud { right: 3%; bottom: 3%; }
+    .opponent-hud { right: 3%; bottom: 3%; }
+    .user-hud { left: 3%; top: 3%; }
     .opponent-sprite { left: auto; right: 5%; top: 28%; width: 190px; height: 190px; max-width: 35vw; }
     .user-sprite { right: auto; left: 5%; bottom: 20%; width: 220px; height: 220px; max-width: 38vw; }
     .opponent-platform { left: auto; right: -2%; top: 46%; }
@@ -743,9 +744,8 @@ button.team-member:hover:not(:disabled) { transform: translateY(-2px); border-co
     .team-heading small { display: none; }
     .battle-stage { flex: 1 1 auto; min-height: 210px; height: 40dvh; border-width: 2px; border-radius: .8rem .8rem 0 0; }
     .battle-hud { width: min(47%, 168px); padding: .3rem .38rem; border-width: 2px; box-shadow: 3px 4px 0 rgba(20, 43, 42, .2); }
-    /* Required mobile field order: local HUD → local sprite, opponent sprite → opponent HUD. */
-    .user-hud { right: auto; left: .45rem; top: .45rem; bottom: auto; }
-    .opponent-hud { left: auto; right: .45rem; top: auto; bottom: .45rem; }
+    .user-hud { left: auto; right: .45rem; top: auto; bottom: .45rem; }
+    .opponent-hud { right: auto; left: .45rem; top: .45rem; bottom: auto; }
     .hud-title-row, .hud-footer, .hp-row { gap: .35rem; }
     .hud-title-row h2 { font-size: .66rem; line-height: 1.05; }
     .level-badge { font-size: .48rem; }
